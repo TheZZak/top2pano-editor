@@ -1,49 +1,13 @@
-// SVG-only export (WYSIWYG)
+// Exporter (WYSIWYG) — SVG only
 // Exports the current SVG canvas as `floorplan.svg` using the current viewBox (zoom/pan).
 (function () {
-  function downloadBlob(blob, filename) {
-    const a = document.createElement("a");
-    const url = URL.createObjectURL(blob);
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 3000);
+  // Hard guard: if this script is loaded/initialized twice (or a cached older copy also runs),
+  // avoid wiring multiple exporters.
+  if (typeof window !== "undefined") {
+    if (window.__TOP2PANO_EXPORT_INIT__ === true) return;
+    window.__TOP2PANO_EXPORT_INIT__ = true;
   }
 
-  function exportSvg() {
-    const svgEl = document.getElementById("lin");
-    if (!svgEl) return;
-
-    const clone = svgEl.cloneNode(true);
-    clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
-
-    // Keep current camera viewBox (WYSIWYG)
-    const vb = svgEl.getAttribute("viewBox");
-    if (vb) clone.setAttribute("viewBox", vb);
-
-    // Remove the absolute-positioning style to make the exported SVG cleaner.
-    clone.removeAttribute("style");
-
-    const serializer = new XMLSerializer();
-    const svgString = serializer.serializeToString(clone);
-    downloadBlob(new Blob([svgString], { type: "image/svg+xml;charset=utf-8" }), "floorplan.svg");
-
-    if (window.$) $("#boxinfo").html("Exported <b>floorplan.svg</b>");
-  }
-
-  window.addEventListener("DOMContentLoaded", () => {
-    const btn = document.getElementById("export_mode");
-    if (!btn) return;
-    btn.addEventListener("click", exportSvg);
-  });
-})();
-
-// Exporter (WYSIWYG) — SVG only
-// Exports the canvas exactly as you see it.
-
-(function () {
   function downloadBlob(blob, filename) {
     const a = document.createElement("a");
     const url = URL.createObjectURL(blob);
@@ -74,13 +38,38 @@
     const svgString = serializer.serializeToString(clone);
 
     downloadBlob(new Blob([svgString], { type: "image/svg+xml;charset=utf-8" }), "floorplan.svg");
-    $("#boxinfo").html("Exported <b>floorplan.svg</b>");
+    if (window.$) $("#boxinfo").html("Exported <b>floorplan.svg</b>");
   }
 
   // Wire button
   window.addEventListener("DOMContentLoaded", () => {
-    const btn = document.getElementById("export_mode");
+    const btn = document.getElementById("export_mode_v2");
     if (!btn) return;
-    btn.addEventListener("click", exportSVG);
+    // Guard against double-binding if this script is accidentally loaded twice.
+    if (btn.dataset && btn.dataset.exportBound === "1") return;
+    if (btn.dataset) btn.dataset.exportBound = "1";
+    btn.addEventListener("click", (e) => {
+      // Prevent accidental double-trigger (double click / touch quirks / multiple handlers).
+      if (e && typeof e.preventDefault === "function") e.preventDefault();
+      if (e && typeof e.stopPropagation === "function") e.stopPropagation();
+
+      // Ignore double-click (2nd click has detail=2 in most browsers).
+      if (e && typeof e.detail === "number" && e.detail > 1) return;
+
+      if (btn.dataset && btn.dataset.exportBusy === "1") return;
+      if (btn.dataset) btn.dataset.exportBusy = "1";
+
+      const prevDisabled = btn.disabled;
+      btn.disabled = true;
+      try {
+        exportSVG();
+      } finally {
+        // Small delay so a single gesture cannot trigger multiple downloads.
+        setTimeout(() => {
+          if (btn.dataset) btn.dataset.exportBusy = "0";
+          btn.disabled = prevDisabled;
+        }, 1200);
+      }
+    });
   });
 })();
