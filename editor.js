@@ -554,36 +554,80 @@ var editor = {
     this.width = (this.size / meter).toFixed(2);
     this.height = (this.thick / meter).toFixed(2);
 
+    function safeValueKey(v) {
+      if (v == null) return "";
+      if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") return String(v);
+      if (typeof v === "object") {
+        // Include flags so toggling them forces a re-render.
+        if (typeof v.src === "string") {
+          const outline = (typeof v.outline !== "undefined") ? (v.outline ? 1 : 0) : 0;
+          const lockAspect = (typeof v.lockAspect !== "undefined") ? (v.lockAspect ? 1 : 0) : 1;
+          return `src:${v.src}|outline:${outline}|lockAspect:${lockAspect}`;
+        }
+        if (typeof v.text === "string" || typeof v.size !== "undefined") {
+          return `text:${v.text || ""}|size:${v.size || ""}`;
+        }
+        try {
+          return JSON.stringify(v);
+        } catch (_) {
+          return "[object]";
+        }
+      }
+      return String(v);
+    }
+
+    function renderConstruc(graph, cc) {
+      graph.empty();
+      var blank;
+      for (var tt = 0; tt < cc.length; tt++) {
+        blank = null;
+        if (cc[tt].path) {
+          blank = qSVG.create('none', 'path', {
+            d: cc[tt].path,
+            "stroke-width": 1,
+            fill: cc[tt].fill,
+            stroke: cc[tt].stroke,
+            'stroke-dasharray': cc[tt].strokeDashArray,
+            opacity: cc[tt].opacity
+          });
+        }
+        if (cc[tt].text) {
+          blank = qSVG.create("none", "text", {
+            x: cc[tt].x,
+            y: cc[tt].y,
+            'font-size': cc[tt].fontSize,
+            stroke: cc[tt].stroke,
+            "stroke-width": cc[tt].strokeWidth,
+            'font-family': 'roboto',
+            'text-anchor': 'middle',
+            fill: cc[tt].fill
+          });
+          blank[0].textContent = cc[tt].text;
+        }
+        if (cc[tt].image) {
+          blank = qSVG.create("none", "image", {
+            x: cc[tt].x,
+            y: cc[tt].y,
+            width: cc[tt].width,
+            height: cc[tt].height,
+            opacity: cc[tt].opacity != null ? cc[tt].opacity : 1,
+            preserveAspectRatio: cc[tt].preserveAspectRatio || "none"
+          });
+          if (cc[tt].href) {
+            // Set via DOM APIs to avoid jQuery/SVG quirks around `href`.
+            const el = blank.get(0);
+            el.setAttribute("href", cc[tt].href);
+            el.setAttributeNS("http://www.w3.org/1999/xlink", "href", cc[tt].href);
+            el.setAttributeNS("http://www.w3.org/1999/xlink", "xlink:href", cc[tt].href);
+          }
+        }
+        if (blank) graph.append(blank);
+      }
+    }
+
     var cc = carpentryCalc(classe, type, size, thick, value);
-    var blank;
-
-    for (var tt = 0; tt < cc.length; tt++) {
-      if (cc[tt].path) {
-        blank = qSVG.create('none', 'path', {
-          d: cc[tt].path,
-          "stroke-width": 1,
-          fill: cc[tt].fill,
-          stroke: cc[tt].stroke,
-          'stroke-dasharray': cc[tt].strokeDashArray,
-          opacity: cc[tt].opacity
-        });
-      }
-      if (cc[tt].text) {
-        blank = qSVG.create("none", "text", {
-          x: cc[tt].x,
-          y: cc[tt].y,
-          'font-size': cc[tt].fontSize,
-          stroke: cc[tt].stroke,
-          "stroke-width": cc[tt].strokeWidth,
-          'font-family': 'roboto',
-          'text-anchor': 'middle',
-          fill: cc[tt].fill
-        });
-        blank[0].textContent = cc[tt].text;
-      }
-      this.graph.append(blank);
-
-    } // ENDFOR
+    renderConstruc(this.graph, cc);
+    this._renderKey = `${this.class}|${this.type}|${this.size}|${this.thick}|${safeValueKey(this.value)}`;
     var bbox = this.graph.get(0).getBoundingClientRect();
     bbox.x = (bbox.x * factor) - (offset.left * factor) + originX_viewbox;
     bbox.y = (bbox.y * factor) - (offset.top * factor) + originY_viewbox;
@@ -599,14 +643,11 @@ var editor = {
     this.update = function () {
       this.width = (this.size / meter).toFixed(2);
       this.height = (this.thick / meter).toFixed(2);
-      cc = carpentryCalc(this.class, this.type, this.size, this.thick, this.value);
-      for (var tt = 0; tt < cc.length; tt++) {
-        if (cc[tt].path) {
-          this.graph.find('path')[tt].setAttribute("d", cc[tt].path);
-        }
-        else {
-          // this.graph.find('text').context.textContent = cc[tt].text;
-        }
+      var nextKey = `${this.class}|${this.type}|${this.size}|${this.thick}|${safeValueKey(this.value)}`;
+      if (nextKey !== this._renderKey) {
+        cc = carpentryCalc(this.class, this.type, this.size, this.thick, this.value);
+        renderConstruc(this.graph, cc);
+        this._renderKey = nextKey;
       }
       var hingeStatus = this.hinge; // normal - reverse
       var hingeUpdate;

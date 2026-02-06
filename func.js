@@ -38,6 +38,161 @@ let originY_viewbox = 0;
 let zoom = 9;
 let factor = 1;
 
+// Cache-buster used for assets (images + assets.js) so replacing a PNG file
+// with the same filename still updates in the browser after refresh.
+// This is especially helpful when using `python3 -m http.server`.
+window.__TOP2PANO_ASSET_BUSTER__ = window.__TOP2PANO_ASSET_BUSTER__ || String(Date.now());
+
+function withAssetBuster(url) {
+    if (!url || typeof url !== "string") return url;
+    const b = (typeof window !== "undefined" && window.__TOP2PANO_ASSET_BUSTER__) ? window.__TOP2PANO_ASSET_BUSTER__ : "";
+    if (!b) return url;
+    // Only bust local asset files (avoid CDN URLs).
+    const isLocal = url.startsWith("img/") || url.startsWith("./img/") || url.startsWith("img\\") || url.startsWith("./img\\");
+    if (!isLocal) return url;
+    // Strip existing `v=` if present and re-append.
+    const base = url.replace(/([?&])v=[^&]*(&?)/, (m, p1, p2) => (p2 ? p1 : ""));
+    const sep = base.includes("?") ? "&" : "?";
+    return `${base}${sep}v=${encodeURIComponent(b)}`;
+}
+
+function getTop2PanoAssets() {
+    const assets = (typeof window !== "undefined" && window.TOP2PANO_ASSETS) ? window.TOP2PANO_ASSETS : {};
+    return {
+        objects: Array.isArray(assets.objects) ? assets.objects : [],
+        textures: Array.isArray(assets.textures) ? assets.textures : []
+    };
+}
+
+function ensureRoomTexturePattern(texture) {
+    const svg = document.getElementById('lin');
+    if (!svg) return false;
+    const defs = svg.querySelector('defs');
+    if (!defs) return false;
+    if (!texture || !texture.id || !texture.src) return false;
+
+    const escapedId = (typeof CSS !== "undefined" && CSS.escape) ? CSS.escape(texture.id) : texture.id;
+    if (defs.querySelector(`#${escapedId}`)) return true;
+
+    const svgNS = "http://www.w3.org/2000/svg";
+    const xlinkNS = "http://www.w3.org/1999/xlink";
+    const tile = Number(texture.tileSize) || 128;
+
+    const pattern = document.createElementNS(svgNS, "pattern");
+    pattern.setAttribute("id", texture.id);
+    pattern.setAttribute("patternUnits", "userSpaceOnUse");
+    // Start with a square tile, then adjust to the image aspect ratio on load
+    // to avoid letterboxing (which shows up as white gaps/bands).
+    pattern.setAttribute("width", String(tile));
+    pattern.setAttribute("height", String(tile));
+
+    const image = document.createElementNS(svgNS, "image");
+    image.setAttribute("x", "0");
+    image.setAttribute("y", "0");
+    image.setAttribute("width", String(tile));
+    image.setAttribute("height", String(tile));
+    // Avoid default "meet" behavior that can create empty space in the tile.
+    image.setAttribute("preserveAspectRatio", "none");
+    const texSrc = withAssetBuster(texture.src);
+    image.setAttribute("href", texSrc);
+    image.setAttributeNS(xlinkNS, "xlink:href", texSrc);
+
+    pattern.appendChild(image);
+    defs.appendChild(pattern);
+
+    // Adjust pattern tile to the texture's real aspect ratio so we don't render
+    // bands when the source image isn't square (e.g. 136x102).
+    try {
+        const probe = new Image();
+        probe.onload = function () {
+            const w = Number(probe.naturalWidth || probe.width || 0);
+            const h = Number(probe.naturalHeight || probe.height || 0);
+            if (!w || !h) return;
+            const scale = tile / Math.max(w, h);
+            const tileW = Math.max(1, Math.round(w * scale));
+            const tileH = Math.max(1, Math.round(h * scale));
+            pattern.setAttribute("width", String(tileW));
+            pattern.setAttribute("height", String(tileH));
+            image.setAttribute("width", String(tileW));
+            image.setAttribute("height", String(tileH));
+        };
+        probe.src = texSrc;
+    } catch (_) { }
+
+    return true;
+}
+
+function initCustomAssetsUI() {
+    const assets = getTop2PanoAssets();
+
+    const homeList = document.getElementById('home_list');
+    if (homeList) {
+        homeList.innerHTML = "";
+        if (assets.objects.length === 0) {
+            const hint = document.createElement("div");
+            hint.style.padding = "8px 10px";
+            hint.style.color = "var(--text-secondary)";
+            hint.style.fontSize = "11px";
+            hint.textContent = "Add PNGs to img/assets/ and regenerate assets.js";
+            homeList.appendChild(hint);
+        } else {
+            for (let i = 0; i < assets.objects.length; i++) {
+                const obj = assets.objects[i];
+                const btn = document.createElement("button");
+                btn.className = "btn fully object home-item-btn";
+                btn.type = "button";
+                btn.dataset.object = obj.id;
+                btn.title = obj.label || obj.id;
+
+                // Thumbnail icon (use the asset image itself for easy differentiation)
+                const icon = document.createElement("img");
+                icon.className = "home-item-icon";
+                icon.alt = obj.label || obj.id;
+                icon.loading = "lazy";
+                icon.decoding = "async";
+                icon.src = withAssetBuster(obj.src);
+
+                // Fallback FontAwesome icon if image fails to load
+                const fallback = document.createElement("i");
+                fallback.className = "fa-solid fa-cube home-item-icon-fallback";
+                fallback.setAttribute("aria-hidden", "true");
+                fallback.style.display = "none";
+
+                icon.addEventListener("error", function () {
+                    icon.style.display = "none";
+                    fallback.style.display = "";
+                });
+
+                const label = document.createElement("span");
+                label.className = "home-item-label";
+                label.textContent = obj.label || obj.id;
+
+                btn.appendChild(icon);
+                btn.appendChild(fallback);
+                btn.appendChild(label);
+                homeList.appendChild(btn);
+            }
+        }
+    }
+
+    const customMaterials = document.getElementById('custom_materials');
+    if (customMaterials) {
+        customMaterials.innerHTML = "";
+        for (let i = 0; i < assets.textures.length; i++) {
+            const tex = assets.textures[i];
+            ensureRoomTexturePattern(tex);
+            const swatch = document.createElement("div");
+            swatch.className = "roomColor";
+            swatch.dataset.type = tex.id;
+            swatch.title = tex.label || tex.id;
+            swatch.style.backgroundImage = `url('${withAssetBuster(tex.src)}')`;
+            swatch.style.backgroundSize = "cover";
+            swatch.style.backgroundPosition = "center";
+            customMaterials.appendChild(swatch);
+        }
+    }
+}
+
 // **************************************************************************
 // *****************   LOAD / SAVE LOCALSTORAGE      ************************
 // **************************************************************************
@@ -394,7 +549,11 @@ function load(index = HISTORY.index, boot = false) {
         }, OO.angle, OO.angleSign, OO.size, OO.hinge = 'normal', OO.thick, OO.value);
         obj.limit = OO.limit;
         OBJDATA.push(obj);
-        $('#boxcarpentry').append(OBJDATA[OBJDATA.length - 1].graph);
+        let targetBox = 'boxcarpentry';
+        if (OBJDATA[OBJDATA.length - 1].class === 'energy') targetBox = 'boxEnergy';
+        if (OBJDATA[OBJDATA.length - 1].class === 'furniture') targetBox = 'boxFurniture';
+        if (OBJDATA[OBJDATA.length - 1].class === 'text') targetBox = 'boxText';
+        $('#' + targetBox).append(OBJDATA[OBJDATA.length - 1].graph);
         obj.update();
     }
     WALLS = historyTemp.wallData;
@@ -410,11 +569,38 @@ function load(index = HISTORY.index, boot = false) {
     editor.architect(WALLS);
     editor.showScaleBox();
     rib();
+
+    // If available, normalize furniture sizes from their image natural sizes.
+    // (This keeps existing canvases consistent when image assets are updated.)
+    try {
+        if (typeof window !== "undefined" && typeof window.normalizeHomeObjectSizes === "function") {
+            window.normalizeHomeObjectSizes();
+        }
+    } catch (_) { }
 }
 
 $('svg').each(function () {
     $(this)[0].setAttribute('viewBox', originX_viewbox + ' ' + originY_viewbox + ' ' + width_viewbox + ' ' + height_viewbox)
 });
+
+// `func.js` may be loaded dynamically (after DOMContentLoaded) depending on
+// how `index.html` includes scripts. Ensure assets UI always initializes.
+(function bootAssetsUI() {
+    function run() {
+        try {
+            initCustomAssetsUI();
+        } catch (e) {
+            // Non-fatal; editor can still work without custom assets UI.
+            console.error("initCustomAssetsUI failed", e);
+        }
+    }
+
+    if (document.readyState === "loading") {
+        window.addEventListener("DOMContentLoaded", run);
+    } else {
+        run();
+    }
+})();
 
 // **************************************************************************
 // *****************   FUNCTIONS ON BUTTON click     ************************
@@ -728,9 +914,29 @@ document.getElementById("bboxStepsMinus").addEventListener("click", function () 
 document.getElementById('bboxWidth').addEventListener("input", function () {
     let sliderValue = this.value;
     let objTarget = binder.obj;
+    if (objTarget && objTarget.class === 'furniture' && objTarget.value && typeof objTarget.value === 'object') {
+        objTarget.value.autoSize = false;
+        const lockEl = document.getElementById('bboxLockAspect');
+        objTarget.value.lockAspect = !!(lockEl && lockEl.checked);
+    }
     objTarget.size = (sliderValue / 100) * meter;
+    // If locked, adjust height to keep the original aspect ratio.
+    try {
+        if (objTarget && objTarget.class === 'furniture' && objTarget.value && typeof objTarget.value === 'object') {
+            const v = objTarget.value;
+            if (v.lockAspect && v.naturalW && v.naturalH) {
+                objTarget.thick = objTarget.size * (Number(v.naturalH) / Number(v.naturalW));
+                const hCm = Math.round((objTarget.thick / meter) * 100);
+                const hEl = document.getElementById('bboxHeight');
+                const hValEl = document.getElementById('bboxHeightVal');
+                if (hEl) hEl.value = String(hCm);
+                if (hValEl) hValEl.textContent = String(hCm);
+            }
+        }
+    } catch (_) { }
     objTarget.update();
     binder.size = (sliderValue / 100) * meter;
+    binder.thick = objTarget.thick;
     binder.update();
     document.getElementById("bboxWidthVal").textContent = sliderValue;
 });
@@ -738,9 +944,29 @@ document.getElementById('bboxWidth').addEventListener("input", function () {
 document.getElementById('bboxHeight').addEventListener("input", function () {
     let sliderValue = this.value;
     let objTarget = binder.obj;
+    if (objTarget && objTarget.class === 'furniture' && objTarget.value && typeof objTarget.value === 'object') {
+        objTarget.value.autoSize = false;
+        const lockEl = document.getElementById('bboxLockAspect');
+        objTarget.value.lockAspect = !!(lockEl && lockEl.checked);
+    }
     objTarget.thick = (sliderValue / 100) * meter;
+    // If locked, adjust width to keep the original aspect ratio.
+    try {
+        if (objTarget && objTarget.class === 'furniture' && objTarget.value && typeof objTarget.value === 'object') {
+            const v = objTarget.value;
+            if (v.lockAspect && v.naturalW && v.naturalH) {
+                objTarget.size = objTarget.thick * (Number(v.naturalW) / Number(v.naturalH));
+                const wCm = Math.round((objTarget.size / meter) * 100);
+                const wEl = document.getElementById('bboxWidth');
+                const wValEl = document.getElementById('bboxWidthVal');
+                if (wEl) wEl.value = String(wCm);
+                if (wValEl) wValEl.textContent = String(wCm);
+            }
+        }
+    } catch (_) { }
     objTarget.update();
     binder.thick = (sliderValue / 100) * meter;
+    binder.size = objTarget.size;
     binder.update();
     document.getElementById("bboxHeightVal").textContent = sliderValue;
 });
@@ -754,6 +980,24 @@ document.getElementById('bboxRotation').addEventListener("input", function () {
     binder.update();
     document.getElementById("bboxRotationVal").textContent = sliderValue;
 });
+
+// Toggle furniture aspect ratio lock (affects how the SVG image is rendered).
+try {
+    const lockEl = document.getElementById('bboxLockAspect');
+    if (lockEl) {
+        lockEl.addEventListener('change', function () {
+            try {
+                if (!binder || !binder.obj) return;
+                const objTarget = binder.obj;
+                if (objTarget.class !== 'furniture') return;
+                if (!objTarget.value || typeof objTarget.value !== 'object') objTarget.value = {};
+                objTarget.value.lockAspect = !!lockEl.checked;
+                objTarget.update();
+                binder.update();
+            } catch (_) { }
+        });
+    }
+} catch (_) { }
 
 document.getElementById('doorWindowWidth').addEventListener("input", function () {
     let sliderValue = this.value;
@@ -946,6 +1190,8 @@ function throttle(callback, delay) {
 
 linElement.mousewheel(throttle(function (event) {
     event.preventDefault();
+    // Avoid zoom jitter while drag-panning (trackpads can emit wheel events during drag).
+    if (typeof drag !== "undefined" && drag === 'on') return;
     if (event.deltaY > 0) {
         zoom_maker('zoomin', 200);
     } else {
@@ -1090,14 +1336,13 @@ for (let k = 0; k < zoomBtn.length; k++) {
     })
 }
 
-let roomColorBtn = document.querySelectorAll(".roomColor");
-for (let k = 0; k < roomColorBtn.length; k++) {
-    roomColorBtn[k].addEventListener("click", function () {
-        let data = this.getAttribute('data-type');
-        $('#roomBackground').val(data);
+$(document).on("click", ".roomColor", function () {
+    let data = this.getAttribute('data-type');
+    $('#roomBackground').val(data);
+    if (typeof (binder) != 'undefined' && binder && typeof binder.attr === "function") {
         binder.attr({ 'fill': 'url(#' + data + ')' });
-    });
-}
+    }
+});
 
 let objTrashBtn = document.querySelectorAll(".objTrash");
 for (let k = 0; k < objTrashBtn.length; k++) {
@@ -1854,10 +2099,14 @@ $('.window').click(function () {
     fonc_button('door_mode', this.id);
 });
 
-$('.object').click(function () {
+$(document).on('click', '.object', function () {
+    // Stair has its own dedicated handler below; prevent this generic
+    // object handler from overriding `modeOption` after the stair click.
+    if (this.id === 'stair_mode') return;
     cursor('move');
     $('#boxinfo').html('Add an object');
-    fonc_button('object_mode', this.id);
+    const option = (this.dataset && this.dataset.object) ? this.dataset.object : this.id;
+    fonc_button('object_mode', option);
 });
 
 $('#stair_mode').click(function () {
@@ -2046,8 +2295,8 @@ function carpentryCalc(classObj, typeObj, sizeObj, thickObj, dividerObj = 10) {
     if (classObj === 'boundingBox') {
 
         pushToConstruc(construc,
-            "M" + (-sizeObj / 2 - 10) + "," + (-thickObj / 2 - 10) + " L" + (sizeObj / 2 + 10) + "," + (-thickObj / 2 - 10) + " L" +
-            (sizeObj / 2 + 10) + "," + (thickObj / 2 + 10) + " L" + (-sizeObj / 2 - 10) + "," + (thickObj / 2 + 10) + " Z", 'none',
+            "M" + (-sizeObj / 2 - 2) + "," + (-thickObj / 2 - 2) + " L" + (sizeObj / 2 + 2) + "," + (-thickObj / 2 - 2) + " L" +
+            (sizeObj / 2 + 2) + "," + (thickObj / 2 + 2) + " L" + (-sizeObj / 2 - 2) + "," + (thickObj / 2 + 2) + " Z", 'none',
             "#aaa", '');
 
         // construc.push({'path':"M"+dividerObj[0].x+","+dividerObj[0].y+" L"+dividerObj[1].x+","+dividerObj[1].y+" L"+dividerObj[2].x+",
@@ -2297,7 +2546,36 @@ function carpentryCalc(classObj, typeObj, sizeObj, thickObj, dividerObj = 10) {
         construc.params.bindBox = true;
         construc.params.move = true;
         construc.params.resize = true;
+        construc.params.resizeLimit.width = { min: 20, max: 600 };
+        construc.params.resizeLimit.height = { min: 20, max: 600 };
         construc.params.rotate = true;
+
+        let src = false;
+        if (dividerObj && typeof dividerObj === "object" && dividerObj.src) {
+            src = dividerObj.src;
+        } else {
+            const assets = getTop2PanoAssets();
+            const found = assets.objects.find(o => o.id === typeObj);
+            if (found && found.src) src = found.src;
+        }
+
+        if (src) {
+            // Optional outline (useful for preview while moving); keep it off for
+            // settled objects to avoid visible bounding boxes.
+            const showOutline = !!(dividerObj && typeof dividerObj === "object" && dividerObj.outline);
+            if (showOutline) {
+                pushToConstruc(construc, "M " + (-sizeObj / 2) + "," + (-thickObj / 2) + " L " + (-sizeObj / 2) + "," +
+                    thickObj / 2 + " L " + sizeObj / 2 + "," + thickObj / 2 + " L " + sizeObj / 2 + "," + (-thickObj / 2) +
+                    " Z", "none", "#666", 'none', 0.35);
+            }
+            const lockAspect = !(dividerObj && typeof dividerObj === "object" && dividerObj.lockAspect === false);
+            const par = lockAspect ? "xMidYMid meet" : "none";
+            pushToConstrucImage(construc, src, -sizeObj / 2, -thickObj / 2, sizeObj, thickObj, 1, par);
+        } else {
+            pushToConstruc(construc, "M " + (-sizeObj / 2) + "," + (-thickObj / 2) + " L " + (-sizeObj / 2) + "," +
+                thickObj / 2 + " L " + sizeObj / 2 + "," + thickObj / 2 + " L " + sizeObj / 2 + "," + (-thickObj / 2) +
+                " Z", "#fff", "#333", '');
+        }
     }
 
     return construc;
@@ -2332,5 +2610,18 @@ function pushToConstruc(construc, path, fill, stroke, strokeDashArray, opacity =
         'stroke': stroke,
         'strokeDashArray': strokeDashArray,
         'opacity': opacity
+    });
+}
+
+function pushToConstrucImage(construc, href, x, y, width, height, opacity = 1, preserveAspectRatio = "xMidYMid meet") {
+    construc.push({
+        image: true,
+        href: withAssetBuster(href),
+        x: x,
+        y: y,
+        width: width,
+        height: height,
+        opacity: opacity,
+        preserveAspectRatio: preserveAspectRatio
     });
 }

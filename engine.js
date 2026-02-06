@@ -1,3 +1,93 @@
+// --- ViewBox panning state (screen-space anchor + origin anchor) ---
+let panStartX = 0;
+let panStartY = 0;
+let panOriginX = 0;
+let panOriginY = 0;
+
+// Cache image natural sizes so home objects can size dynamically
+// based on the actual image file (no manifest hardcoding needed).
+const __homeImageSizeCache = new Map();
+function getImageNaturalSize(src) {
+  if (!src) return Promise.resolve(null);
+  // If the URL already contains a cache buster, treat it as unique.
+  if (__homeImageSizeCache.has(src)) return Promise.resolve(__homeImageSizeCache.get(src));
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = function () {
+      const w = Number(img.naturalWidth || img.width || 0);
+      const h = Number(img.naturalHeight || img.height || 0);
+      const size = (w > 0 && h > 0) ? { w, h } : null;
+      __homeImageSizeCache.set(src, size);
+      resolve(size);
+    };
+    img.onerror = function () {
+      __homeImageSizeCache.set(src, null);
+      resolve(null);
+    };
+    // Try to bust cache for local asset paths so replacing the file with the same
+    // name is reflected after refresh.
+    var b = (typeof window !== "undefined" && window.__TOP2PANO_ASSET_BUSTER__) ? window.__TOP2PANO_ASSET_BUSTER__ : "";
+    if (b && (src.startsWith("img/") || src.startsWith("./img/"))) {
+      const sep = src.includes("?") ? "&" : "?";
+      img.src = src + sep + "v=" + encodeURIComponent(b);
+    } else {
+      img.src = src;
+    }
+  });
+}
+
+function applyNaturalSizeToObject(obj) {
+  try {
+    if (!obj || obj.class !== 'furniture') return;
+    const v = obj.value;
+    const src = v && typeof v === 'object' ? v.src : null;
+    // If user manually resized, don't force natural size anymore.
+    if (v && typeof v === 'object' && v.autoSize === false) return;
+    if (!src) return;
+    getImageNaturalSize(src).then((size) => {
+      if (!size) return;
+      // Object may have been deleted; guard on graph existence.
+      if (!obj || !obj.graph) return;
+      // Only update if it would change something (avoid extra redraws).
+      if (obj.size === size.w && obj.thick === size.h) return;
+      obj.size = size.w;
+      obj.thick = size.h;
+      // Remember natural dimensions so we can preserve aspect ratio when desired.
+      if (v && typeof v === 'object') {
+        v.naturalW = size.w;
+        v.naturalH = size.h;
+        if (typeof v.lockAspect === 'undefined') v.lockAspect = true;
+      }
+      if (v && typeof v === 'object' && typeof v.autoSize === 'undefined') {
+        v.autoSize = true;
+      }
+      obj.update();
+    });
+  } catch (_) {
+    // Non-fatal; sizing falls back to manifest defaults.
+  }
+}
+
+// Expose for history load / debugging.
+if (typeof window !== "undefined") {
+  window.normalizeHomeObjectSizes = function normalizeHomeObjectSizes() {
+    if (typeof OBJDATA === "undefined" || !Array.isArray(OBJDATA)) return;
+    for (var i = 0; i < OBJDATA.length; i++) {
+      applyNaturalSizeToObject(OBJDATA[i]);
+    }
+  };
+}
+
+function getHomeObjectAsset(id) {
+  const list = (typeof window !== "undefined" && window.TOP2PANO_ASSETS && Array.isArray(window.TOP2PANO_ASSETS.objects))
+    ? window.TOP2PANO_ASSETS.objects
+    : [];
+  for (var i = 0; i < list.length; i++) {
+    if (list[i] && list[i].id === id) return list[i];
+  }
+  return null;
+}
+
 document.querySelector('#lin').addEventListener("mouseup", _MOUSEUP);
 document.querySelector('#lin').addEventListener("mousemove", throttle(function (event) { _MOUSEMOVE(event); }, 30));
 document.querySelector('#lin').addEventListener("mousedown", _MOUSEDOWN, true);
@@ -93,8 +183,19 @@ function _MOUSEMOVE(event) {
       if (modeOption == 'simpleStair') binder = new editor.obj2D("free", "stair", "simpleStair", snap, 0, 0, 0, "normal", 0, 15);
       else {
         var typeObj = modeOption;
-        binder = new editor.obj2D("free", "energy", typeObj, snap, 0, 0, 0, "normal", 0);
+        var homeAsset = getHomeObjectAsset(typeObj);
+        if (homeAsset && homeAsset.src) {
+          var w = Number(homeAsset.defaultWidth) || 120;
+          var h = Number(homeAsset.defaultHeight) || 120;
+          binder = new editor.obj2D("free", "furniture", typeObj, snap, 0, 0, w, "normal", h, { src: homeAsset.src, label: homeAsset.label || typeObj, outline: true, autoSize: true });
+        } else {
+          binder = new editor.obj2D("free", "energy", typeObj, snap, 0, 0, 0, "normal", 0);
+        }
       }
+      binder.update();
+      // If this is a furniture image, resize it dynamically to the image's
+      // natural pixel size as soon as the browser loads it.
+      applyNaturalSizeToObject(binder);
 
       $('#boxbind').append(binder.graph);
     }
@@ -1098,15 +1199,25 @@ function _MOUSEMOVE(event) {
   // ENDBIND ACTION MOVE **************************************************************************
 
   // ---DRAG VIEWBOX PANNING -------------------------------------------------------
-
+  // Use screen-space deltas anchored at mousedown to avoid any feedback loop
+  // from viewBox updates (especially noticeable when zoomed out).
   if (mode == 'select_mode' && drag == 'on') {
-    snap = calcul_snap(event, grid_snap);
     $('#lin').css('cursor', 'move');
-    distX = (snap.xMouse - pox) * factor;
-    distY = (snap.yMouse - poy) * factor;
-    // pox = event.pageX;
-    // poy = event.pageY;
-    zoom_maker('zoomdrag', distX, distY);
+    let evtX, evtY;
+    if (event.touches) {
+      evtX = event.touches[0].pageX;
+      evtY = event.touches[0].pageY;
+    } else {
+      evtX = event.pageX;
+      evtY = event.pageY;
+    }
+
+    originX_viewbox = panOriginX - (evtX - panStartX) * factor;
+    originY_viewbox = panOriginY - (evtY - panStartY) * factor;
+
+    $('svg').each(function () {
+      $(this)[0].setAttribute('viewBox', originX_viewbox + ' ' + originY_viewbox + ' ' + width_viewbox + ' ' + height_viewbox);
+    });
   }
 } // END MOUSEMOVE
 
@@ -1371,9 +1482,17 @@ function _MOUSEDOWN(event) {
     else {
       action = 0;
       drag = 'on';
-      snap = calcul_snap(event, grid_snap);
-      pox = snap.xMouse;
-      poy = snap.yMouse;
+      // Anchor panning in screen space and remember the viewBox origin at drag start.
+      // This makes panning stable at any zoom level.
+      if (event.touches) {
+        panStartX = event.touches[0].pageX;
+        panStartY = event.touches[0].pageY;
+      } else {
+        panStartX = event.pageX;
+        panStartY = event.pageY;
+      }
+      panOriginX = originX_viewbox;
+      panOriginY = originY_viewbox;
     }
   }
 }
@@ -1415,12 +1534,42 @@ function _MOUSEUP(event) {
   //**************        OBJECT   MODE **************************************
   //**************************************************************************
   if (mode == 'object_mode') {
+    // If the user clicks to drop an object without any prior mousemove,
+    // the preview binder may not exist yet. Create it here so drop works.
+    if (typeof (binder) == 'undefined') {
+      var snapNow = calcul_snap(event, grid_snap);
+      if (modeOption == 'simpleStair') {
+        binder = new editor.obj2D("free", "stair", "simpleStair", snapNow, 0, 0, 0, "normal", 0, 15);
+      } else {
+        var typeObjNow = modeOption;
+        var homeAssetNow = getHomeObjectAsset(typeObjNow);
+        if (homeAssetNow && homeAssetNow.src) {
+          var wNow = Number(homeAssetNow.defaultWidth) || 120;
+          var hNow = Number(homeAssetNow.defaultHeight) || 120;
+          binder = new editor.obj2D("free", "furniture", typeObjNow, snapNow, 0, 0, wNow, "normal", hNow, { src: homeAssetNow.src, label: homeAssetNow.label || typeObjNow, outline: true, autoSize: true });
+        } else {
+          binder = new editor.obj2D("free", "energy", typeObjNow, snapNow, 0, 0, 0, "normal", 0);
+        }
+      }
+      binder.update();
+      applyNaturalSizeToObject(binder);
+      $('#boxbind').append(binder.graph);
+    }
+
+    // Furniture preview uses an outline for visibility; turn it off when settled.
+    if (binder && binder.class === 'furniture' && binder.value && typeof binder.value === 'object') {
+      binder.value.outline = false;
+      binder.update();
+    }
+
     OBJDATA.push(binder);
     binder.graph.remove();
     var targetBox = 'boxcarpentry';
     if (OBJDATA[OBJDATA.length - 1].class == 'energy') targetBox = 'boxEnergy';
     if (OBJDATA[OBJDATA.length - 1].class == 'furniture') targetBox = 'boxFurniture';
     $('#' + targetBox).append(OBJDATA[OBJDATA.length - 1].graph);
+    // Ensure dropped furniture gets updated to natural size too.
+    applyNaturalSizeToObject(OBJDATA[OBJDATA.length - 1]);
     delete binder;
     $('#boxinfo').html('Object added');
     fonc_button('select_mode');
@@ -1680,21 +1829,38 @@ function _MOUSEUP(event) {
           $('#lin').css('cursor', 'default');
           $('#boxinfo').html('Modify the object');
           console.log(objTarget)
-          document.getElementById('bboxWidth').setAttribute('min', objTarget.params.resizeLimit.width.min);
-          document.getElementById('bboxWidth').setAttribute('max', objTarget.params.resizeLimit.width.max);
-          document.getElementById('bboxWidthScale').textContent = objTarget.params.resizeLimit.width.min + "-" + objTarget.params.resizeLimit.height.max;
-          document.getElementById('bboxHeight').setAttribute('min', objTarget.params.resizeLimit.height.min);
-          document.getElementById('bboxHeight').setAttribute('max', objTarget.params.resizeLimit.height.max);
-          document.getElementById('bboxHeightScale').textContent = objTarget.params.resizeLimit.height.min + "-" + objTarget.params.resizeLimit.height.max;
+          var wMin = (objTarget.params.resizeLimit && objTarget.params.resizeLimit.width && objTarget.params.resizeLimit.width.min !== false) ? objTarget.params.resizeLimit.width.min : 10;
+          var wMax = (objTarget.params.resizeLimit && objTarget.params.resizeLimit.width && objTarget.params.resizeLimit.width.max !== false) ? objTarget.params.resizeLimit.width.max : 1200;
+          var hMin = (objTarget.params.resizeLimit && objTarget.params.resizeLimit.height && objTarget.params.resizeLimit.height.min !== false) ? objTarget.params.resizeLimit.height.min : 10;
+          var hMax = (objTarget.params.resizeLimit && objTarget.params.resizeLimit.height && objTarget.params.resizeLimit.height.max !== false) ? objTarget.params.resizeLimit.height.max : 1200;
+          document.getElementById('bboxWidth').setAttribute('min', wMin);
+          document.getElementById('bboxWidth').setAttribute('max', wMax);
+          document.getElementById('bboxWidthScale').textContent = wMin + "-" + wMax;
+          document.getElementById('bboxHeight').setAttribute('min', hMin);
+          document.getElementById('bboxHeight').setAttribute('max', hMax);
+          document.getElementById('bboxHeightScale').textContent = hMin + "-" + hMax;
           $('#stepsCounter').hide();
           if (objTarget.class == 'stair') {
             document.getElementById("bboxStepsVal").textContent = objTarget.value;
             $('#stepsCounter').show();
           }
-          document.getElementById("bboxWidth").value = objTarget.width * 100;
-          document.getElementById("bboxWidthVal").textContent = objTarget.width * 100;
-          document.getElementById("bboxHeight").value = objTarget.height * 100;
-          document.getElementById("bboxHeightVal").textContent = objTarget.height * 100;
+          var initW = Math.round(parseFloat(objTarget.width) * 100);
+          var initH = Math.round(parseFloat(objTarget.height) * 100);
+          document.getElementById("bboxWidth").value = initW;
+          document.getElementById("bboxWidthVal").textContent = initW;
+          document.getElementById("bboxHeight").value = initH;
+          document.getElementById("bboxHeightVal").textContent = initH;
+          // Furniture can optionally unlock aspect ratio scaling.
+          try {
+            const lockEl = document.getElementById("bboxLockAspect");
+            if (lockEl && objTarget && objTarget.class === 'furniture') {
+              if (objTarget.value && typeof objTarget.value === 'object' && typeof objTarget.value.lockAspect !== 'undefined') {
+                lockEl.checked = !!objTarget.value.lockAspect;
+              } else {
+                lockEl.checked = true;
+              }
+            }
+          } catch (_) { }
           document.getElementById("bboxRotation").value = objTarget.angle;
           document.getElementById("bboxRotationVal").textContent = objTarget.angle;
           mode = 'edit_boundingBox_mode';

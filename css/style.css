@@ -509,6 +509,40 @@ body {
   background: var(--bg-hover);
 }
 
+/* Home assets submenu: thumbnail + label */
+.home-item-btn {
+  gap: 10px;
+}
+
+.home-item-icon,
+.home-item-icon-fallback {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+}
+
+.home-item-icon {
+  object-fit: contain;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.home-item-icon-fallback {
+  font-size: 14px;
+  color: var(--text-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.home-item-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* ============================================
    AREA VALUE DISPLAY
    ============================================ */

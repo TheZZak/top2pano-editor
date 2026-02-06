@@ -1,0 +1,157 @@
+#!/usr/bin/env python3
+"""
+Generate `top2pano-editor/assets.js` from files in `top2pano-editor/img/assets/`.
+
+Rules:
+  - Filenames starting with `tex_` become room textures (patterns).
+  - All other images become placeable "home objects".
+
+Usage:
+  python3 top2pano-editor/scripts/generate_assets_manifest.py
+"""
+
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+
+
+def _slugify(name: str) -> str:
+    base = os.path.splitext(name)[0]
+    out = []
+    for ch in base:
+        if ch.isalnum() or ch in ("_", "-"):
+            out.append(ch)
+        else:
+            out.append("_")
+    slug = "".join(out).strip("_")
+    return slug or "asset"
+
+
+def _read_png_size(path: Path) -> tuple[int, int] | None:
+    """
+    Read PNG width/height from the IHDR chunk without external deps.
+    Returns (w, h) or None if not a PNG/invalid.
+    """
+    try:
+        with path.open("rb") as f:
+            sig = f.read(8)
+            if sig != b"\x89PNG\r\n\x1a\n":
+                return None
+            _len = int.from_bytes(f.read(4), "big")
+            ctype = f.read(4)
+            if ctype != b"IHDR":
+                return None
+            w = int.from_bytes(f.read(4), "big")
+            h = int.from_bytes(f.read(4), "big")
+            if w <= 0 or h <= 0:
+                return None
+            return (w, h)
+    except OSError:
+        return None
+
+
+def main() -> int:
+    root = Path(__file__).resolve().parents[1]  # top2pano-editor/
+    assets_dir = root / "img" / "assets"
+    out_file = root / "assets.js"
+
+    # Defaults are in "editor units".
+    # For PNGs, we default to the image's actual pixel width/height so
+    # canvas sizes match the source assets consistently.
+    # Fallback sizes when we can't read image dimensions (e.g. invalid/corrupt PNGs,
+    # or formats where we don't parse width/height).
+    #
+    # Keep these aligned with the current real assets in `img/assets/` so behavior
+    # remains stable even if dimension probing fails.
+    preset_sizes: dict[str, tuple[int, int]] = {
+        "bed": (254, 258),
+        "chair": (80, 92),
+        "countertop": (240, 70),
+        "fridge": (48, 42),
+        "sink": (54, 84),
+        "sofa": (268, 120),
+        "table": (92, 98),
+        "toilet": (44, 62),
+        "tvstand": (240, 70),
+    }
+
+    objects: list[dict] = []
+    textures: list[dict] = []
+
+    if assets_dir.exists():
+        for p in sorted(assets_dir.iterdir(), key=lambda x: x.name.lower()):
+            if not p.is_file():
+                continue
+            if p.name.startswith("."):
+                continue
+            if p.suffix.lower() not in (".png", ".jpg", ".jpeg", ".webp", ".svg"):
+                continue
+
+            asset_id = _slugify(p.name)
+            rel_src = f"img/assets/{p.name}"
+            if asset_id.startswith("tex_"):
+                # Use a smaller repeat size; users can adjust in assets.js.
+                tile_size = 96
+                if p.suffix.lower() == ".png":
+                    png_size = _read_png_size(p)
+                    if png_size:
+                        tile_size = max(32, min(256, int(max(png_size) / 2)))
+                textures.append(
+                    {
+                        "id": asset_id,
+                        "label": asset_id,
+                        "src": rel_src,
+                        "tileSize": tile_size,
+                    }
+                )
+            else:
+                label = asset_id.replace("_", " ").replace("-", " ").title()
+                # Prefer real PNG dimensions so object sizes match the images.
+                default_w = 120
+                default_h = 120
+                if p.suffix.lower() == ".png":
+                    png_size = _read_png_size(p)
+                    if png_size:
+                        default_w, default_h = png_size
+                    elif asset_id in preset_sizes:
+                        default_w, default_h = preset_sizes[asset_id]
+                    else:
+                        # Keep aspect ratio by default: set the longest side to 120.
+                        max_side = 120
+                        # unknown PNG size; keep square fallback
+                        default_w = max_side
+                        default_h = max_side
+                else:
+                    # Non-PNG: fall back to presets or a reasonable square.
+                    if asset_id in preset_sizes:
+                        default_w, default_h = preset_sizes[asset_id]
+                objects.append(
+                    {
+                        "id": asset_id,
+                        "label": label,
+                        "src": rel_src,
+                        "defaultWidth": default_w,
+                        "defaultHeight": default_h,
+                    }
+                )
+
+    payload = {
+        "objects": objects,
+        "textures": textures,
+    }
+
+    js = (
+        "// Auto-generated by scripts/generate_assets_manifest.py\n"
+        "window.TOP2PANO_ASSETS = "
+        + json.dumps(payload, ensure_ascii=False, indent=2)
+        + ";\n"
+    )
+    out_file.write_text(js, encoding="utf-8")
+    print(f"Wrote {out_file} ({len(objects)} objects, {len(textures)} textures)")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

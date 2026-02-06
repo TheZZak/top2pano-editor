@@ -445,6 +445,18 @@ var qSVG = {
       var junction = [];
       var segmentJunction = [];
       var junctionChild = [];
+      // Numerical tolerance (SVG units). This prevents tiny gaps/overshoots
+      // (common when snapping or from float intersections) from breaking
+      // junction detection, which can cause two adjacent rooms to be merged.
+      var EPS = 1;
+      function samePoint(p1, p2) {
+        return (Math.abs(p1.x - p2.x) <= EPS) && (Math.abs(p1.y - p2.y) <= EPS);
+      }
+      function btwnEps(a, b1, b2) {
+        var min = Math.min(b1, b2) - EPS;
+        var max = Math.max(b1, b2) + EPS;
+        return (a >= min) && (a <= max);
+      }
       // JUNCTION ARRAY LIST ALL SEGMENT INTERSECTIONS
       for (var i = 0; i < WALLS.length; i++) {
         var equation1 = qSVG.createEquation(WALLS[i].start.x, WALLS[i].start.y, WALLS[i].end.x, WALLS[i].end.y);
@@ -454,18 +466,16 @@ var qSVG = {
             var intersec;
             if (intersec = qSVG.intersectionOfEquations(equation1, equation2)) {
 
-                if (WALLS[i].end.x == WALLS[v].start.x && WALLS[i].end.y == WALLS[v].start.y || WALLS[i].start.x == WALLS[v].end.x && WALLS[i].start.y == WALLS[v].end.y) {
-                  if (WALLS[i].end.x == WALLS[v].start.x && WALLS[i].end.y == WALLS[v].start.y) {
+                if (samePoint(WALLS[i].end, WALLS[v].start) || samePoint(WALLS[i].start, WALLS[v].end)) {
+                  if (samePoint(WALLS[i].end, WALLS[v].start)) {
                     junction.push({segment:i, child: v, values: [WALLS[v].start.x, WALLS[v].start.y], type: "natural"});
                   }
-                  if (WALLS[i].start.x == WALLS[v].end.x && WALLS[i].start.y == WALLS[v].end.y) {
+                  if (samePoint(WALLS[i].start, WALLS[v].end)) {
                     junction.push({segment:i, child: v, values: [WALLS[i].start.x, WALLS[i].start.y], type: "natural"});
                   }
                 }
                 else {
-                  if (qSVG.btwn(intersec[0], WALLS[i].start.x, WALLS[i].end.x, 'round') && qSVG.btwn(intersec[1], WALLS[i].start.y, WALLS[i].end.y, 'round') && qSVG.btwn(intersec[0], WALLS[v].start.x, WALLS[v].end.x, 'round') && qSVG.btwn(intersec[1], WALLS[v].start.y, WALLS[v].end.y, 'round')) {
-                    intersec[0] = intersec[0];
-                    intersec[1] = intersec[1];
+                  if (btwnEps(intersec[0], WALLS[i].start.x, WALLS[i].end.x) && btwnEps(intersec[1], WALLS[i].start.y, WALLS[i].end.y) && btwnEps(intersec[0], WALLS[v].start.x, WALLS[v].end.x) && btwnEps(intersec[1], WALLS[v].start.y, WALLS[v].end.y)) {
                     junction.push({segment:i, child: v, values: [intersec[0], intersec[1]], type: "intersection"});
                   }
                 }
@@ -473,10 +483,10 @@ var qSVG = {
             // IF EQ1 == EQ 2 FIND IF START OF SECOND SEG == END OF FIRST seg (eq.A maybe values H ou V)
           if ((Math.abs(equation1.A) == Math.abs(equation2.A) || equation1.A == equation2.A) && equation1.B == equation2.B) {
 
-            if (WALLS[i].end.x == WALLS[v].start.x && WALLS[i].end.y == WALLS[v].start.y) {
+            if (samePoint(WALLS[i].end, WALLS[v].start)) {
               junction.push({segment:i, child: v, values: [WALLS[v].start.x, WALLS[v].start.y], type: "natural"});
             }
-            if (WALLS[i].start.x == WALLS[v].end.x && WALLS[i].start.y == WALLS[v].end.y) {
+            if (samePoint(WALLS[i].start, WALLS[v].end)) {
               junction.push({segment:i, child: v, values: [WALLS[i].start.x, WALLS[i].start.y], type: "natural"});
             }
             }
