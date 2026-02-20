@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+
+# Playwright / tests
+test-results/
+playwright-report/
+screenshots/
+.blob/
+
+# Python (local_model_server_stub)
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+.env
+.env.*
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Logs
+*.log
+npm-debug.log*
