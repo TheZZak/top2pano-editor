@@ -1,0 +1,8 @@
+{
+  "name": "top2pano-editor",
+  "version": "1.0.0",
+  "private": true,
+  "devDependencies": {
+    "@playwright/test": "^1.40.0"
+  }
+}
